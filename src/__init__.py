@@ -1,20 +1,31 @@
-"""Skuper Intelligence - Emergency Stockout Resolver"""
+"""Skuper Intelligence - Agentic Inventory Rebalancing"""
 
-from .agent import (
-                    EMERGENCY_RESOLVER_SYSTEM_PROMPT,
-                    create_emergency_resolver_agent,
-                    create_emergency_workflow,
+from .agent_emergency import (
+                              EMERGENCY_RESOLVER_SYSTEM_PROMPT,
+                              create_emergency_agent,
+                              create_emergency_workflow,
+)
+from .agent_proactive import (
+                              PROACTIVE_RESOLVER_SYSTEM_PROMPT,
+                              create_proactive_agent,
+                              create_proactive_resolver_agent,
+                              create_proactive_workflow,
 )
 from .config import CURRENT_DATE, DB_CONFIG, LLM_CONFIG, OPENAI_API_KEY
 from .models import (
-                    EmergencyStockoutState,
-                    Recommendation,
-                    SKUProblem,
-                    StockoutRecord,
-                    SurplusLocation,
-                    TransportationLane,
+                              EmergencyAgentState,
+                              EmergencyStockoutState,
+                              ProactiveAgentState,
+                              ProactiveRebalanceState,
+                              ProactiveRecommendation,
+                              Recommendation,
+                              SKUProblem,
+                              StockoutRecord,
+                              SurplusLocation,
+                              TransportationLane,
 )
-from .orchestrator import StockoutOrchestrator
+from .orchestrator_emergency import StockoutOrchestrator
+from .orchestrator_proactive import ProactiveOrchestrator
 from .tools import ALL_TOOLS
 
 __all__ = [
@@ -26,11 +37,20 @@ __all__ = [
     "SurplusLocation",
     "TransportationLane",
     "Recommendation",
-    "EmergencyStockoutState",
+    "EmergencyStockoutState",  # Legacy Pydantic model
+    "EmergencyAgentState",  # New TypedDict state
+    "ProactiveRebalanceState",  # Legacy Pydantic model
+    "ProactiveAgentState",      # New TypedDict state
+    "ProactiveRecommendation",
     "SKUProblem",
     "ALL_TOOLS",
     "EMERGENCY_RESOLVER_SYSTEM_PROMPT",
-    "create_emergency_resolver_agent",
-    "create_emergency_workflow",
+    "create_emergency_agent",     # New create_agent approach
+    "create_emergency_workflow",  # Legacy wrapper
+    "PROACTIVE_RESOLVER_SYSTEM_PROMPT",
+    "create_proactive_agent",     # New create_agent approach
+    "create_proactive_resolver_agent",
+    "create_proactive_workflow",  # Legacy wrapper
     "StockoutOrchestrator",
+    "ProactiveOrchestrator",
 ]

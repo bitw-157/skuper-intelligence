@@ -1,11 +1,12 @@
 """Emergency Stockout Resolver Agent"""
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from typing import Any, Dict
+
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langgraph.graph import END, StateGraph
 
 from .config import LLM_CONFIG, OPENAI_API_KEY
-from .models import EmergencyStockoutState
+from .models import AgentOutput, EmergencyAgentState
 from .tools import ALL_TOOLS
 
 # Complete System Prompt for Emergency Stockout Resolver
@@ -61,29 +62,54 @@ You will receive:
 ---
 ## FINAL OUTPUT FORMAT
 
-You MUST return a structured JSON response in this exact format:
+You MUST return a structured JSON response with **per-location granularity**:
 
-**If surplus inventory available:**
+**If at least one location can be resolved:**
 ```json
 {
-  "output_type": "TRANSFER",
-  "transfers": [
+  "output_type": "SOLUTION",
+  "location_results": [
     {
-      "from_location": "location_id",
-      "to_location": "location_id",
-      "quantity": 100,
-      "reasoning": "Brief explanation of this transfer",
-      "estimated_cost": 1234.56
+      "location_id": "RDC_06",
+      "shortage_qty": -64,
+      "status": "RESOLVED",
+      "transfer": {
+        "from_location": "DC_01",
+        "to_location": "RDC_06",
+        "quantity": 64,
+        "reasoning": "Brief explanation",
+        "estimated_cost": 1234.56
+      },
+      "reason_unresolved": null
+    },
+    {
+      "location_id": "RDC_03",
+      "shortage_qty": -150,
+      "status": "UNRESOLVED",
+      "transfer": null,
+      "reason_unresolved": "No ColdChain-compliant surplus locations available within 3-day lead time"
     }
   ],
+  "summary": "Resolved 1 of 2 locations for SKU_001. RDC_03 requires external procurement.",
+  "transfers": [],
   "priority_analysis": null
 }
 ```
 
-**If NO surplus inventory available:**
+**If NO locations can be resolved (complete escalation):**
 ```json
 {
-  "output_type": "PRIORITY_ANALYSIS",
+  "output_type": "ESCALATION",
+  "location_results": [
+    {
+      "location_id": "RDC_06",
+      "shortage_qty": -200,
+      "status": "UNRESOLVED",
+      "transfer": null,
+      "reason_unresolved": "No surplus inventory available network-wide"
+    }
+  ],
+  "summary": "No surplus available for SKU_005. Requires external procurement.",
   "transfers": [],
   "priority_analysis": {
     "summary": "Brief overview of the situation",
@@ -93,6 +119,14 @@ You MUST return a structured JSON response in this exact format:
   }
 }
 ```
+
+**CRITICAL RULES:**
+- Each stockout location MUST have a `location_results` entry
+- Mark each location as 'RESOLVED' (with transfer) or 'UNRESOLVED' (with reason)
+- If location resolved, `transfer` field must contain the transfer details
+- If location unresolved, `reason_unresolved` must explain why (e.g., "No ColdChain surplus", "Cost exceeds $5000", "No lanes within lead time")
+- `summary` should be human-readable: "Resolved 2/3 locations" or "All locations resolved"
+- Populate legacy `transfers` field for backward compatibility (extract all transfers from location_results)
 
 ---
 # DECISION FRAMEWORK
@@ -445,128 +479,16 @@ END OF SYSTEM PROMPT
 """
 
 
-def create_emergency_resolver_agent(use_structured_output=False):
-    """Create and configure the Emergency Stockout Resolver Agent
-    
-    Note: structured_output is disabled because it conflicts with tool calling.
-    The agent uses JSON formatting in prompts instead.
-    """
-    config = {
-        "api_key": OPENAI_API_KEY,
-        "model": LLM_CONFIG["model"],
-        "temperature": LLM_CONFIG["temperature"],
-        "max_tokens": LLM_CONFIG.get("max_tokens", 4000),
-        "reasoning": LLM_CONFIG.get("reasoning"),
-    }
-
-    llm = ChatOpenAI(**config)
-    
-    # Structured output conflicts with tool binding in LangGraph
-    # Using JSON schema in system prompt instead
-    
-    return llm
+# ============================================================================
+# SKU Problem Initialization Helper
+# ============================================================================
 
 
-def create_emergency_workflow():
-    """Create the LangGraph workflow for emergency stockout resolution"""
-    llm = create_emergency_resolver_agent()
-    llm_with_tools = llm.bind_tools(ALL_TOOLS)
-
-    workflow = StateGraph(EmergencyStockoutState)
-
-    def agent_node(state: EmergencyStockoutState) -> EmergencyStockoutState:
-        """Main agent reasoning node"""
-        messages = state.messages
-
-        if not messages:
-            messages = [
-                SystemMessage(content=EMERGENCY_RESOLVER_SYSTEM_PROMPT),
-                HumanMessage(content=_format_sku_problem(state)),
-            ]
-
-        response = llm_with_tools.invoke(messages)
-        messages.append(response)
-        state.messages = messages
-        state.reasoning_trace.append(
-            response.content if hasattr(response, "content") else str(response)
-        )
-        state.current_step = "agent_reasoning"
-        state.iteration_count += 1  # Increment iteration counter
-
-        return state
-
-    def tool_node(state: EmergencyStockoutState) -> EmergencyStockoutState:
-        """Execute tools requested by the agent"""
-        messages = state.messages
-        last_message = messages[-1]
-
-        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            for tool_call in last_message.tool_calls:
-                tool_name = tool_call["name"]
-                tool_args = tool_call["args"]
-                tool_call_id = tool_call.get("id", "unknown")
-
-                tool_func = next((t for t in ALL_TOOLS if t.name == tool_name), None)
-
-                if tool_func:
-                    result = tool_func.invoke(tool_args)
-
-                    # Create proper ToolMessage with tool_call_id
-                    tool_message = ToolMessage(
-                        content=str(result), tool_call_id=tool_call_id, name=tool_name
-                    )
-                    messages.append(tool_message)
-
-                    state.tools_called.append({"tool": tool_name, "args": tool_args})
-
-            state.messages = messages
-            state.current_step = "tool_execution"
-
-        return state
-
-    def should_continue(state: EmergencyStockoutState) -> str:
-        """Determine next step based on agent's output"""
-        messages = state.messages
-
-        if not messages:
-            return "agent"
-
-        # Check iteration limit FIRST (before tool calls)
-        if state.iteration_count >= 2:
-            return "end"
-
-        last_message = messages[-1]
-
-        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            return "tools"
-
-        if state.final_recommendations:
-            return "end"
-
-        # If agent provided content without tool calls, end
-        if last_message.content and not last_message.tool_calls:
-            return "end"
-
-        return "agent"
-
-    workflow.add_node("agent", agent_node)
-    workflow.add_node("tools", tool_node)
-
-    workflow.set_entry_point("agent")
-    workflow.add_conditional_edges(
-        "agent", should_continue, {"agent": "agent", "tools": "tools", "end": END}
-    )
-    workflow.add_edge("tools", "agent")
-
-    return workflow.compile()
-
-
-def _format_sku_problem(state: EmergencyStockoutState) -> str:
+def format_sku_problem(state: Dict[str, Any]) -> str:
     """Format the SKU problem into a clear prompt for the agent"""
-    sku_id = state.sku_id
-    product_details = state.product_details
-    stockout_locations = state.stockout_locations
-    available_inventory = state.available_inventory
+    sku_id = state.get("sku_id", "Unknown")
+    product_details = state.get("product_details", {})
+    stockout_locations = state.get("stockout_locations", [])
 
     prompt = f"""
 You have been assigned to resolve stockouts for **{sku_id}**.
@@ -581,18 +503,31 @@ You have been assigned to resolve stockouts for **{sku_id}**.
 """
 
     for stockout in stockout_locations:
+        # Handle both dict and object types
+        if isinstance(stockout, dict):
+            location_id = stockout.get("location_id", "Unknown")
+            location_type = stockout.get("location_type", "Unknown")
+            end_inv = stockout.get("end_inv_qty", 0)
+            safety_stock = stockout.get("safety_stock_qty", 0)
+            demand = stockout.get("demand_fcst_qty", 0)
+            priority = stockout.get("priority_tier", 0)
+        else:
+            location_id = getattr(stockout, "location_id", "Unknown")
+            location_type = getattr(stockout, "location_type", "Unknown")
+            end_inv = getattr(stockout, "end_inv_qty", 0)
+            safety_stock = getattr(stockout, "safety_stock_qty", 0)
+            demand = getattr(stockout, "demand_fcst_qty", 0)
+            priority = getattr(stockout, "priority_tier", 0)
+
         prompt += f"""
-- **{stockout.location_id}** ({stockout.location_type}):
-  - Current Inventory: {stockout.end_inv_qty} units (shortage!)
-  - Safety Stock Target: {stockout.safety_stock_qty} units
-  - Weekly Demand Forecast: {stockout.demand_fcst_qty} units
-  - Priority Tier: {stockout.priority_tier}
+- **{location_id}** ({location_type}):
+  - Current Inventory: {end_inv} units (shortage!)
+  - Safety Stock Target: {safety_stock} units
+  - Weekly Demand Forecast: {demand} units
+  - Priority Tier: {priority}
 """
 
-    prompt += f"""
-## Available Surplus Locations:
-{len(available_inventory)} locations have excess inventory for this SKU.
-
+    prompt += """
 ## Your Task:
 Analyze this situation and generate transfer recommendation(s) to resolve the stockout(s).
 Follow your decision framework (assess severity → find surplus → evaluate routes → validate → recommend).
@@ -601,3 +536,42 @@ Begin your analysis now.
 """
 
     return prompt
+
+
+# ============================================================================
+# AGENT CREATION
+# ============================================================================
+
+
+def create_emergency_agent():
+    """Create Emergency Stockout Resolver Agent using LangChain's create_agent.
+
+    Returns:
+        Compiled agent ready for invocation
+    """
+    llm = ChatOpenAI(
+        api_key=OPENAI_API_KEY,
+        model=LLM_CONFIG["model"],
+        temperature=LLM_CONFIG["temperature"],
+        reasoning_effort=LLM_CONFIG["reasoning"]["emergency"],
+    )
+
+    agent = create_agent(
+        model=llm,
+        tools=ALL_TOOLS,
+        state_schema=EmergencyAgentState,
+        system_prompt=EMERGENCY_RESOLVER_SYSTEM_PROMPT,
+        response_format=AgentOutput,
+    )
+
+    return agent
+
+
+# ============================================================================
+# LEGACY COMPATIBILITY
+# ============================================================================
+
+
+def create_emergency_workflow():
+    """Legacy backward compatibility function."""
+    return create_emergency_agent()

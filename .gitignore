@@ -18,3 +18,7 @@ wheels/
 
 # Data folder
 data/
+
+# Log files
+skuper_run_*.log
+*.log
