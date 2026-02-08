@@ -84,25 +84,15 @@ skuper_repo/
 ├── pyproject.toml                   # Dependencies (uv package manager)
 ├── README.md                        # This file
 │
-├── src/                             # Core application code
-│   ├── __init__.py                  # Package exports
-│   ├── config.py                    # Database & LLM configuration loader
-│   ├── models.py                    # Pydantic v2 data models
-│   ├── tools.py                     # 12 database query tools
-│   ├── agent_emergency.py           # Emergency agent (Type A)
-│   ├── agent_proactive.py           # Proactive agent (Type B)
-│   ├── orchestrator_emergency.py    # Emergency orchestrator (parallel processing)
-│   └── orchestrator_proactive.py    # Proactive orchestrator (parallel processing)
-│
-└── data/                            # CSV data files (PostgreSQL import sources)
-    ├── Projection_Calcs_4w.csv     # 4-week inventory projections
-    ├── Supply_Plan.csv             # Incoming supply orders
-    ├── Demand_Forecast_4w.csv      # Demand forecasts
-    ├── Inventory_Batches.csv       # Current batch-level inventory
-    ├── Locations.csv               # Facility master data
-    ├── Products.csv                # SKU master data
-    ├── SafetyStock_Params.csv      # Minimum stock targets
-    └── Transportation_Lanes.csv    # Shipping routes & costs
+└── src/                             # Core application code
+    ├── __init__.py                  # Package exports
+    ├── config.py                    # Database & LLM configuration loader
+    ├── models.py                    # Pydantic v2 data models
+    ├── tools.py                     # 12 database query tools
+    ├── agent_emergency.py           # Emergency agent (Type A)
+    ├── agent_proactive.py           # Proactive agent (Type B)
+    ├── orchestrator_emergency.py    # Emergency orchestrator (parallel processing)
+    └── orchestrator_proactive.py    # Proactive orchestrator (parallel processing)
 ```
 
 ---
@@ -451,12 +441,12 @@ Both agents now provide per-location resolution status:
   - [src/orchestrator_emergency.py](src/orchestrator_emergency.py)
   - [src/orchestrator_proactive.py](src/orchestrator_proactive.py)
 
-### Data Sources
-All CSV files in `data/` directory are imported into PostgreSQL tables:
-- `Projection_Calcs_4w.csv` → `projection_calcs_4w` table
-- `Supply_Plan.csv` → `supply_plan` table
-- `Inventory_Batches.csv` → `inventory_batches` table
-- (See data/README_DataDictionary.csv for full schema)
+### Data Setup
+Database tables are pre-populated via PostgreSQL. Ensure the following tables exist:
+- `projection_calcs_4w` - 4-week inventory projections
+- `supply_plan` - Incoming supply orders
+- `inventory_batches` - Batch-level inventory
+- (See database schema documentation for complete table structure)
 
 ---
 
